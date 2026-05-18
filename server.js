@@ -1,4 +1,3 @@
-// server.js
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -10,22 +9,17 @@ dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Увеличиваем лимит, чтобы аватарки (base64) нормально загружались
+app.use(express.json({ limit: '10mb' }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: {
-    origin: "*", // В проде лучше указать URL твоего фронтенда
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// Подключение к KV базе (Redis на Render)
-// Если REDIS_URL нет, используем временную заглушку в памяти (Map)
 const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL) : null;
 const memoryKV = new Map();
 
-// Вспомогательные функции для работы с KV
 async function setKV(key, value) {
   if (redis) await redis.set(key, JSON.stringify(value));
   else memoryKV.set(key, JSON.stringify(value));
@@ -40,15 +34,31 @@ async function getKV(key) {
   return data ? JSON.parse(data) : null;
 }
 
+// Добавляем пользователя в глобальный список контактов
+async function addUserToList(user) {
+  let users = await getKV('all_users') || [];
+  // Сохраняем без пароля
+  users.push({ id: user.id, username: user.username, email: user.email, avatar: user.avatar });
+  await setKV('all_users', users);
+}
+
 // 1. API Регистрации
 app.post('/api/register', async (req, res) => {
-  const { username, email, password } = req.body;
+  const { username, email, password, avatar } = req.body;
   const existingUser = await getKV(`user:${email}`);
   
-  if (existingUser) return res.status(400).json({ error: 'Пользователь уже существует' });
+  if (existingUser) return res.status(400).json({ error: 'Пользователь с таким email уже существует' });
 
-  const newUser = { id: Date.now(), username, email, password };
+  const newUser = { 
+    id: Date.now().toString(), // Уникальный ID
+    username, 
+    email, 
+    password, 
+    avatar: avatar || '👤' 
+  };
+  
   await setKV(`user:${email}`, newUser);
+  await addUserToList(newUser);
   res.json({ message: 'Успешная регистрация', user: newUser });
 });
 
@@ -58,37 +68,37 @@ app.post('/api/login', async (req, res) => {
   const user = await getKV(`user:${email}`);
   
   if (!user || user.password !== password) {
-    return res.status(401).json({ error: 'Неверные данные' });
+    return res.status(401).json({ error: 'Неверный email или пароль' });
   }
   res.json({ message: 'Успешный вход', user });
 });
 
-// 3. WebSockets для сообщений
-io.on('connection', (socket) => {
-  console.log('Пользователь подключился:', socket.id);
+// 3. API Получения списка всех пользователей
+app.get('/api/users', async (req, res) => {
+  const users = await getKV('all_users') || [];
+  res.json(users);
+});
 
-  // Присоединение к чату
+// 4. API Получения истории переписки
+app.get('/api/messages/:chatId', async (req, res) => {
+  const history = await getKV(`messages:${req.params.chatId}`) || [];
+  res.json(history);
+});
+
+// WebSockets
+io.on('connection', (socket) => {
   socket.on('join_chat', (chatId) => {
     socket.join(chatId);
-    console.log(`User joined chat ${chatId}`);
   });
 
-  // Отправка сообщения
   socket.on('send_message', async (data) => {
-    // data = { chatId, text, senderId, time }
-    const message = { id: Date.now(), ...data };
+    const message = { id: Date.now().toString(), ...data };
     
-    // Сохраняем в KV базу
     let chatHistory = await getKV(`messages:${data.chatId}`) || [];
     chatHistory.push(message);
     await setKV(`messages:${data.chatId}`, chatHistory);
 
-    // Рассылаем всем в комнате
     io.to(data.chatId).emit('receive_message', message);
-  });
-
-  socket.on('disconnect', () => {
-    console.log('Пользователь отключился:', socket.id);
   });
 });
 
