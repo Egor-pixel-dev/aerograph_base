@@ -9,6 +9,7 @@ dotenv.config();
 
 const app = express();
 app.use(cors());
+// Увеличиваем лимит, чтобы аватарки (base64) нормально загружались
 app.use(express.json({ limit: '10mb' }));
 
 const httpServer = createServer(app);
@@ -33,126 +34,75 @@ async function getKV(key) {
   return data ? JSON.parse(data) : null;
 }
 
-// ==================== СТАТУСЫ ПОЛЬЗОВАТЕЛЕЙ ====================
-const userStatus = new Map(); // userId → { online, lastSeen }
-
-// Обновление статуса
-function updateUserStatus(userId, online) {
-  userStatus.set(userId, {
-    online,
-    lastSeen: new Date().toISOString()
-  });
-  
-  // Рассылаем обновление всем подключенным
-  io.emit('user_status_update', { 
-    userId, 
-    online, 
-    lastSeen: userStatus.get(userId).lastSeen 
-  });
+// Добавляем пользователя в глобальный список контактов
+async function addUserToList(user) {
+  let users = await getKV('all_users') || [];
+  // Сохраняем без пароля
+  users.push({ id: user.id, username: user.username, email: user.email, avatar: user.avatar });
+  await setKV('all_users', users);
 }
 
-// ==================== API ====================
-
+// 1. API Регистрации
 app.post('/api/register', async (req, res) => {
   const { username, email, password, avatar } = req.body;
   const existingUser = await getKV(`user:${email}`);
- 
+  
   if (existingUser) return res.status(400).json({ error: 'Пользователь с таким email уже существует' });
 
-  const newUser = {
-    id: Date.now().toString(),
-    username,
-    email,
-    password,
-    avatar: avatar || '👤'
+  const newUser = { 
+    id: Date.now().toString(), // Уникальный ID
+    username, 
+    email, 
+    password, 
+    avatar: avatar || '👤' 
   };
-
+  
   await setKV(`user:${email}`, newUser);
   await addUserToList(newUser);
-  
   res.json({ message: 'Успешная регистрация', user: newUser });
 });
 
+// 2. API Логина
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await getKV(`user:${email}`);
- 
+  
   if (!user || user.password !== password) {
     return res.status(401).json({ error: 'Неверный email или пароль' });
   }
-
-  updateUserStatus(user.id, true); // помечаем как онлайн
-
   res.json({ message: 'Успешный вход', user });
 });
 
+// 3. API Получения списка всех пользователей
 app.get('/api/users', async (req, res) => {
   const users = await getKV('all_users') || [];
   res.json(users);
 });
 
-// Новый эндпоинт для статусов
-app.get('/api/users/status', (req, res) => {
-  const statuses = {};
-  userStatus.forEach((status, userId) => {
-    statuses[userId] = status;
-  });
-  res.json(statuses);
-});
-
-// Keep-alive пинг
-app.post('/api/ping', (req, res) => {
-  const { userId } = req.body;
-  if (userId) updateUserStatus(userId, true);
-  res.sendStatus(200);
-});
-
+// 4. API Получения истории переписки
 app.get('/api/messages/:chatId', async (req, res) => {
   const history = await getKV(`messages:${req.params.chatId}`) || [];
   res.json(history);
 });
 
-async function addUserToList(user) {
-  let users = await getKV('all_users') || [];
-  if (!users.find(u => u.id === user.id)) {
-    users.push({ 
-      id: user.id, 
-      username: user.username, 
-      email: user.email, 
-      avatar: user.avatar 
-    });
-    await setKV('all_users', users);
-  }
-}
-
-// ==================== SOCKET.IO ====================
+// WebSockets
 io.on('connection', (socket) => {
-  console.log('Пользователь подключился:', socket.id);
-
   socket.on('join_chat', (chatId) => {
     socket.join(chatId);
   });
 
   socket.on('send_message', async (data) => {
-    const message = { 
-      id: Date.now().toString(), 
-      ...data,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-   
+    const message = { id: Date.now().toString(), ...data };
+    
     let chatHistory = await getKV(`messages:${data.chatId}`) || [];
     chatHistory.push(message);
     await setKV(`messages:${data.chatId}`, chatHistory);
 
     io.to(data.chatId).emit('receive_message', message);
   });
-
-  socket.on('disconnect', () => {
-    console.log('Пользователь отключился');
-  });
 });
 
 const PORT = process.env.PORT || 10000;
 httpServer.listen(PORT, () => {
-  console.log(`🚀 Сервер успешно запущен на порту ${PORT}`);
+  console.log(`Сервер запущен на порту ${PORT}`);
 });
