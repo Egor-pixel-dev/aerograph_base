@@ -19,12 +19,12 @@ const io = new Server(httpServer, {
 const redis = process.env.REDIS_URL ? new Redis(process.env.REDIS_URL) : null;
 const memoryKV = new Map();
 
-async function setKV(key: string, value: any) {
+async function setKV(key, value) {
   if (redis) await redis.set(key, JSON.stringify(value));
   else memoryKV.set(key, JSON.stringify(value));
 }
 
-async function getKV(key: string) {
+async function getKV(key) {
   if (redis) {
     const data = await redis.get(key);
     return data ? JSON.parse(data) : null;
@@ -33,22 +33,26 @@ async function getKV(key: string) {
   return data ? JSON.parse(data) : null;
 }
 
-// ==================== СТАТУСЫ ====================
-const userStatus = new Map<string, { online: boolean; lastSeen: string }>();
+// ==================== СТАТУСЫ ПОЛЬЗОВАТЕЛЕЙ ====================
+const userStatus = new Map(); // userId → { online, lastSeen }
 
-function updateUserStatus(userId: string, online: boolean) {
+// Обновление статуса
+function updateUserStatus(userId, online) {
   userStatus.set(userId, {
     online,
     lastSeen: new Date().toISOString()
   });
   
-  // Рассылаем обновление всем
-  io.emit('user_status_update', { userId, ...userStatus.get(userId) });
+  // Рассылаем обновление всем подключенным
+  io.emit('user_status_update', { 
+    userId, 
+    online, 
+    lastSeen: userStatus.get(userId).lastSeen 
+  });
 }
 
 // ==================== API ====================
 
-// Регистрация
 app.post('/api/register', async (req, res) => {
   const { username, email, password, avatar } = req.body;
   const existingUser = await getKV(`user:${email}`);
@@ -69,7 +73,6 @@ app.post('/api/register', async (req, res) => {
   res.json({ message: 'Успешная регистрация', user: newUser });
 });
 
-// Логин
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await getKV(`user:${email}`);
@@ -78,20 +81,19 @@ app.post('/api/login', async (req, res) => {
     return res.status(401).json({ error: 'Неверный email или пароль' });
   }
 
-  updateUserStatus(user.id, true); // помечаем онлайн
+  updateUserStatus(user.id, true); // помечаем как онлайн
 
   res.json({ message: 'Успешный вход', user });
 });
 
-// Список пользователей
 app.get('/api/users', async (req, res) => {
   const users = await getKV('all_users') || [];
   res.json(users);
 });
 
-// Статусы пользователей
+// Новый эндпоинт для статусов
 app.get('/api/users/status', (req, res) => {
-  const statuses: any = {};
+  const statuses = {};
   userStatus.forEach((status, userId) => {
     statuses[userId] = status;
   });
@@ -101,22 +103,18 @@ app.get('/api/users/status', (req, res) => {
 // Keep-alive пинг
 app.post('/api/ping', (req, res) => {
   const { userId } = req.body;
-  if (userId) {
-    updateUserStatus(userId, true);
-  }
+  if (userId) updateUserStatus(userId, true);
   res.sendStatus(200);
 });
 
-// История сообщений
 app.get('/api/messages/:chatId', async (req, res) => {
   const history = await getKV(`messages:${req.params.chatId}`) || [];
   res.json(history);
 });
 
-// Добавление пользователя в глобальный список
-async function addUserToList(user: any) {
+async function addUserToList(user) {
   let users = await getKV('all_users') || [];
-  if (!users.find((u: any) => u.id === user.id)) {
+  if (!users.find(u => u.id === user.id)) {
     users.push({ 
       id: user.id, 
       username: user.username, 
@@ -149,14 +147,12 @@ io.on('connection', (socket) => {
     io.to(data.chatId).emit('receive_message', message);
   });
 
-  // Отключение
   socket.on('disconnect', () => {
-    // Можно найти пользователя по socket, но пока упростим
     console.log('Пользователь отключился');
   });
 });
 
 const PORT = process.env.PORT || 10000;
 httpServer.listen(PORT, () => {
-  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+  console.log(`🚀 Сервер успешно запущен на порту ${PORT}`);
 });
