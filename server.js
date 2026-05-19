@@ -90,6 +90,8 @@ app.get('/api/chats-index', async (req, res) => {
 
 // --- WEBSOCKETS ---
 io.on('connection', (socket) => {
+  socket.on('ping', () => socket.emit('pong')); // Отвечаем на пинг
+  
   socket.on('join_chat', (chatId) => socket.join(chatId));
 
   socket.on('send_message', async (data) => {
