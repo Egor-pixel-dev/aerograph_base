@@ -102,6 +102,25 @@ io.on('connection', (socket) => {
   });
 });
 
+// Храним, кто онлайн: { userId: true }
+const onlineUsers = new Set();
+
+io.on('connection', (socket) => {
+  // Юзер сообщает, что он зашел
+  socket.on('user_connected', (userId) => {
+    onlineUsers.add(userId);
+    socket.userId = userId; // Запоминаем ID юзера прямо в сокете
+    io.emit('status_change', { userId, status: 'online' });
+  });
+
+  socket.on('disconnect', () => {
+    if (socket.userId) {
+      onlineUsers.delete(socket.userId);
+      io.emit('status_change', { userId: socket.userId, status: 'offline' });
+    }
+  });
+});
+
 const PORT = process.env.PORT || 10000;
 httpServer.listen(PORT, () => {
   console.log(`Сервер запущен на порту ${PORT}`);
