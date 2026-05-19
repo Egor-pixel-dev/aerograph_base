@@ -13,7 +13,12 @@ app.use(express.json({ limit: '10mb' }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  cors: {
+    origin: "https://aerograph-site.vercel.app", // Твой фронтенд на Vercel
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket'], // Обязательно добавь это
   pingTimeout: 60000,
   pingInterval: 25000
 });
