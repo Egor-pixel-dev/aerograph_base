@@ -56,6 +56,12 @@ app.post('/api/register', async (req, res) => {
     password, 
     avatar: avatar || '👤' 
   };
+
+  // В server.js
+app.get('/api/chats-index', async (req, res) => {
+  const index = await getKV('chats_index') || {};
+  res.json(index);
+});
   
   await setKV(`user:${email}`, newUser);
   await addUserToList(newUser);
